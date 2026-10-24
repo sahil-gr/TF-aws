@@ -67,7 +67,8 @@ module "public_route_table" {
 }
 
 module "nat_gateway" {
-  for_each   = local.zones
+  # Keep the first AZ's existing module address when consolidating NAT gateways.
+  for_each   = { (var.availability_zones[0]) = 0 }
   source     = "../../modules/nat_gateway"
   name       = "${local.name}-nat-${each.key}"
   subnet_id  = module.public_subnet[each.key].id
@@ -80,7 +81,7 @@ module "private_route_table" {
   name           = "${local.name}-private-${each.key}"
   vpc_id         = module.vpc.id
   subnet_ids     = { private = module.private_subnet[each.key].id }
-  nat_gateway_id = module.nat_gateway[each.key].id
+  nat_gateway_id = module.nat_gateway[var.availability_zones[0]].id
 }
 
 module "security_groups" {

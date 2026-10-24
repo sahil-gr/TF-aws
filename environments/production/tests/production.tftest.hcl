@@ -12,8 +12,8 @@ run "production_topology" {
     error_message = "Production requires public and private subnets in two AZs."
   }
   assert {
-    condition     = length(module.nat_gateway) == 2 && length(module.private_route_table) == 2
-    error_message = "Every AZ must have its own NAT gateway and private route table."
+    condition     = length(module.nat_gateway) == 1 && length(module.private_route_table) == 2 && contains(keys(module.nat_gateway), var.availability_zones[0])
+    error_message = "Require one shared NAT gateway in the first AZ and a private route table per AZ."
   }
 }
 

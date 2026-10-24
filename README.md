@@ -28,21 +28,21 @@ flowchart TB
 
             subgraph aza["Availability Zone ap-south-1a"]
                 subgraph public_a["Public subnet 10.20.0.0/24"]
-                    nat_a["NAT Gateway A + Elastic IP"]
+                    nat_a["Shared NAT Gateway + Elastic IP"]
                 end
                 subgraph private_a["Private subnet 10.20.16.0/24"]
                     web_a["Nginx EC2 capacity<br/>Web SG; no public IP / SSH ingress"]
-                    route_a["Private route table A<br/>0.0.0.0/0 to NAT A"]
+                    route_a["Private route table A<br/>0.0.0.0/0 to shared NAT"]
                 end
             end
 
             subgraph azb["Availability Zone ap-south-1b"]
                 subgraph public_b["Public subnet 10.20.1.0/24"]
-                    nat_b["NAT Gateway B + Elastic IP"]
+                    public_b_note["ALB subnet; no NAT gateway"]
                 end
                 subgraph private_b["Private subnet 10.20.17.0/24"]
                     web_b["Nginx EC2 capacity<br/>Web SG; no public IP / SSH ingress"]
-                    route_b["Private route table B<br/>0.0.0.0/0 to NAT B"]
+                    route_b["Private route table B<br/>0.0.0.0/0 to shared NAT"]
                 end
             end
 
@@ -66,9 +66,8 @@ flowchart TB
     web_a -->|Outbound TCP 443| route_a
     route_a --> nat_a
     web_b -->|Outbound TCP 443| route_b
-    route_b --> nat_b
+    route_b -->|Cross-AZ outbound path| nat_a
     nat_a --> publicrt
-    nat_b --> publicrt
     publicrt --> igw
     igw --> internet
     web_a -.->|CloudWatch agent| logs
@@ -81,7 +80,7 @@ flowchart TB
 
 The ALB spans both public subnets; the drawing places its shared listener above them for clarity. Jenkins manages all resources inside the Terraform-managed boundary; its arrow to the Auto Scaling Group represents deployment, not application traffic. The Jenkins EC2 network placement is configured separately and is not defined by this Terraform code.
 
-CIDRs, AZs and capacity values above are defaults. The configuration accepts two or three AZs and creates one public subnet, private subnet, NAT gateway and private route table per AZ. The ASG manages total capacity across the private subnets; the instance boxes do not represent a fixed instance count per AZ. Application EC2 instances accept HTTP only from the ALB security group and use same-AZ NAT gateways for outbound HTTPS. The alarm sends notifications only when `alarm_topic_arns` is populated.
+CIDRs, AZs and capacity values above are defaults. The configuration accepts two or three AZs and creates one public subnet, private subnet and private route table per AZ, with a single shared NAT gateway in the first configured AZ. The ASG manages total capacity across the private subnets; the instance boxes do not represent a fixed instance count per AZ. Application EC2 instances accept HTTP only from the ALB security group and use the shared NAT gateway for outbound HTTPS. Outbound access from all private subnets depends on its AZ; traffic from other AZs can incur cross-AZ transfer charges. The alarm sends notifications only when `alarm_topic_arns` is populated.
 
 ## Structure
 
@@ -91,7 +90,7 @@ modules/
   vpc/                        VPC, DNS support, empty default security group
   subnet/                     Reusable public/private subnet, no auto public IPs
   internet_gateway/           VPC Internet gateway
-  nat_gateway/                NAT gateway and Elastic IP; instantiated per AZ
+  nat_gateway/                One shared NAT gateway and Elastic IP in the first AZ
   route_table/                Route table, default route and subnet associations
   security_groups/            ALB and EC2 security boundaries
   iam/                        EC2 role, scoped log access and SSM profile
@@ -228,7 +227,8 @@ The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipel
 
 ## Operational choices
 
-- One NAT gateway per AZ avoids a shared outbound dependency. Public routes point at the IGW; each private route points at its AZ's NAT. Bootstrap waits for the routes to exist.
+- A single NAT gateway in the first configured AZ serves all private subnets. Public routes point at the IGW; each private route points at the shared NAT. Bootstrap waits for the routes to exist. This reduces NAT gateway and Elastic IP counts but introduces a shared outbound dependency and potential cross-AZ transfer charges. An outage in the NAT AZ affects package installation, SSM and log delivery from all application instances.
+- For an existing per-AZ NAT deployment, review a Jenkins PLAN build before applying: the first AZ's NAT gateway and Elastic IP keep their Terraform addresses, other AZs' NAT gateways and Elastic IPs are removed, and their private default routes switch to the retained NAT. Allow for temporary outbound interruption during the change. Keep the availability-zone list order stable.
 - The internet-facing ALB listens on HTTP port 80 in the public subnets and forwards to private Nginx instances on port 80. EC2 accepts web traffic only from the ALB security group.
 - EC2 uses IMDSv2, encrypted gp3 root disks and detailed monitoring. Nginx and the CloudWatch agent install through HTTPS repositories during bootstrap, with bounded retries and failure logging. Failed web health checks lead to ASG replacement after the grace period.
 - `ami_id = null` discovers the latest matching AL2023 AMI and can cause a rollout on a subsequent plan. Pin an approved AMI for controlled releases. For reproducible deployments, bake Nginx and the agent into a tested AMI and replace package installation in user data with configuration only.
@@ -238,15 +238,16 @@ The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipel
 - ALB deletion protection defaults to enabled. Logging buckets are not force-deleted. Teardown requires disabling protection in a reviewed apply and separately handling retained S3 object versions; normal destroy will fail for a nonempty bucket.
 - AZ list order determines subnet CIDRs; reordering or changing the VPC CIDR can replace networking. Review plans carefully and preserve AZ ordering.
 
-Two NAT gateways, ALB, EC2, EBS, public IPv4, logs and data transfer incur ongoing charges. WAF, DNS records, certificate issuance, organization-level CloudTrail/GuardDuty, backups and workload-specific compliance controls are outside this stack. Review those needs before treating this baseline as production-ready for your service.
+One NAT gateway, ALB, EC2, EBS, public IPv4, logs and data transfer incur ongoing charges. WAF, DNS records, certificate issuance, organization-level CloudTrail/GuardDuty, backups and workload-specific compliance controls are outside this stack. Review those needs before treating this baseline as production-ready for your service.
 
 ## Validation and tests in Jenkins
 
 The **Format** stage runs Terraform formatting checks. The **Validate and test** stage initializes without the backend, validates the configuration and runs the mocked tests. Review the Jenkins console output for results. These stages execute on every branch; production planning and approved applies run on main.
 
-Tests use a mocked AWS provider and do not create AWS resources. They check the two-AZ topology, per-AZ NAT/routes and rejection of single-AZ deployments and invalid client CIDRs. A real plan and post-deployment smoke tests remain necessary to verify account permissions, service quotas, AMI compatibility and runtime bootstrap.
+Tests use a mocked AWS provider and do not create AWS resources. They check the two-AZ topology, one shared NAT gateway and per-AZ private route tables and rejection of single-AZ deployments and invalid client CIDRs. A real plan and post-deployment smoke tests remain necessary to verify account permissions, service quotas, AMI compatibility and runtime bootstrap.
 
 References: [AWS provider ALB listeners](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener), [S3 backend and lockfiles](https://developer.hashicorp.com/terraform/language/backend/s3).
+
 
 
 

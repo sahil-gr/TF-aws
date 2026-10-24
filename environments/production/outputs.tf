@@ -3,7 +3,7 @@ output "vpc_id" {
   value       = module.vpc.id
 }
 output "public_subnet_ids" {
-  description = "ALB and NAT subnets, keyed by availability zone."
+  description = "Public ALB subnets, keyed by availability zone; the first AZ also hosts the shared NAT gateway."
   value       = { for az, subnet in module.public_subnet : az => subnet.id }
 }
 output "private_subnet_ids" {
