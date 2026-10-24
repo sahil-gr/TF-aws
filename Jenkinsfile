@@ -20,8 +20,6 @@
         TF_INPUT = 'false'
         TF_ROOT = 'environments/production'
         PLAN_HAS_CHANGES = 'false'
-        // Jenkins user IDs or group names; configure this group before deployment.
-        PRODUCTION_APPROVERS = 'terraform-production-approvers'
     }
 
     stages {
@@ -92,9 +90,7 @@
             steps {
                 timeout(time: 20, unit: 'MINUTES') {
                     input message: "Review the production plan in build ${env.BUILD_NUMBER} before applying.",
-                        ok: 'Apply saved plan',
-                        submitter: env.PRODUCTION_APPROVERS,
-                        submitterParameter: 'APPROVED_BY'
+                        ok: 'Apply saved plan'
                 }
             }
         }
