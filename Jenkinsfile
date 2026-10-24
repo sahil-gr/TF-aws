@@ -1,4 +1,4 @@
-﻿pipeline {
+pipeline {
     // Run on this Jenkins controller EC2, with Terraform on PATH and an AWS role.
     agent { label 'built-in' }
 
