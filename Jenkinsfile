@@ -1,4 +1,4 @@
-pipeline {
+﻿pipeline {
     // Run on this Jenkins controller EC2, with Terraform on PATH and an AWS role.
     agent { label 'built-in' }
 
@@ -53,42 +53,35 @@ pipeline {
         }
 
         stage('Production plan') {
-            // Production credentials and remote state are only used on trusted main.
+            // Remote state and production planning are only used on trusted main.
             when { branch 'main' }
             steps {
-                // Bind outside dir() so secret files stay outside the browsable workspace.
-                withCredentials([
-                    file(credentialsId: 'terraform-production-backend', variable: 'BACKEND_CONFIG'),
-                    file(credentialsId: 'terraform-production-tfvars', variable: 'PRODUCTION_TFVARS')
-                ]) {
-                    dir(env.TF_ROOT) {
-                        sh '''
-                            set -eu
-                            terraform init -reconfigure -input=false -no-color -backend-config="$BACKEND_CONFIG"
-                        '''
-                        script {
-                            int status = sh(
-                                label: 'Create production plan (0=no changes, 2=changes)',
-                                returnStatus: true,
-                                script: '''
-                                    terraform plan -input=false -no-color -lock-timeout=5m \
-                                        -var-file="$PRODUCTION_TFVARS" \
-                                        -detailed-exitcode -out=production.tfplan
-                                '''
-                            )
-                            if (status == 2) {
-                                env.PLAN_HAS_CHANGES = 'true'
-                            } else if (status != 0) {
-                                error("Terraform plan failed with exit code ${status}.")
-                            } else {
-                                echo 'No infrastructure changes required.'
-                            }
+                dir(env.TF_ROOT) {
+                    // Terraform automatically loads the committed terraform.tfvars.
+                    sh '''
+                        set -eu
+                        terraform init -reconfigure -input=false -no-color
+                    '''
+                    script {
+                        int status = sh(
+                            label: 'Create production plan (0=no changes, 2=changes)',
+                            returnStatus: true,
+                            script: '''
+                                terraform plan -input=false -no-color -lock-timeout=5m \
+                                    -detailed-exitcode -out=production.tfplan
+                            '''
+                        )
+                        if (status == 2) {
+                            env.PLAN_HAS_CHANGES = 'true'
+                        } else if (status != 0) {
+                            error("Terraform plan failed with exit code ${status}.")
+                        } else {
+                            echo 'No infrastructure changes required.'
                         }
                     }
                 }
             }
         }
-
         stage('Approve production apply') {
             when {
                 allOf {
@@ -134,3 +127,4 @@ pipeline {
         }
     }
 }
+

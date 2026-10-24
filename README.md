@@ -85,7 +85,7 @@ CIDRs, AZs and capacity values above are defaults. The configuration accepts two
 ## Structure
 
 ```text
-environments/production/       Deployable root, inputs, backend examples, tests
+environments/production/       Deployable root, inputs, S3 backend configuration, tests
 modules/
   vpc/                        VPC, DNS support, empty default security group
   subnet/                     Reusable public/private subnet, no auto public IPs
@@ -132,7 +132,7 @@ rpm -q jenkins
 sudo cat /var/lib/jenkins/secrets/initialAdminPassword
 ```
 
-Open `http://<controller-address>:8080`, unlock Jenkins, install suggested plugins and create your administrator account. Ensure **Pipeline**, **Git**, and **Credentials Binding** are installed under **Manage Jenkins > Plugins**. Under **Manage Jenkins > Nodes > Built-In Node > Configure**, set the number of executors to **1**, set **Labels** to `built-in`, and set **Usage** to **Only build jobs with label expressions matching this node**. The Jenkinsfile targets `built-in`, so commands run on this EC2 instance.
+Open `http://<controller-address>:8080`, unlock Jenkins, install suggested plugins and create your administrator account. Ensure **Pipeline** and **Git** are installed under **Manage Jenkins > Plugins**. Under **Manage Jenkins > Nodes > Built-In Node > Configure**, set the number of executors to **1**, set **Labels** to `built-in`, and set **Usage** to **Only build jobs with label expressions matching this node**. The Jenkinsfile targets `built-in`, so commands run on this EC2 instance.
 
 ### 2. Install Terraform on the same EC2 instance
 
@@ -182,17 +182,17 @@ sudo systemctl status jenkins --no-pager
 
 ### 3. Configure the Jenkins pipeline
 
-Follow the **Jenkins pipeline** section below to configure the two secret files, deployment permissions, approvers and multibranch job. Jenkins runs formatting checks, validation, mocked tests, production planning and approved applies on this EC2 instance. No workstation testing is required.
+Follow the **Jenkins pipeline** section below to configure the committed production variables, deployment permissions, approvers and multibranch job. Jenkins runs formatting checks, validation, mocked tests, production planning and approved applies on this EC2 instance. No workstation testing is required.
 Installation references: [Jenkins Linux installation](https://www.jenkins.io/doc/book/installing/linux/), [Jenkins LTS releases](https://www.jenkins.io/changelog-stable/), [Jenkins Java support](https://www.jenkins.io/doc/book/platform-information/support-policy-java/), and [Terraform 1.17.0 binaries](https://releases.hashicorp.com/terraform/1.17.0/).
 
 ## Configure production inputs and deploy through Jenkins
 
-Prepare two configuration files from the examples in `environments/production` and upload them as Jenkins **Secret file** credentials using the IDs in the Jenkins section below:
+Configure the S3 backend directly in `environments/production/versions.tf`, then prepare the production variables file for Jenkins:
 
-- `backend.hcl.example`: replace the state bucket, key and region placeholders with your existing S3 backend details.
-- `terraform.tfvars.example`: replace account, AZ and other placeholders; use an approved Amazon Linux 2023 x86_64 AMI for the deployment region.
+- In the `backend "s3"` block in `versions.tf`, replace `REPLACE-WITH-EXISTING-STATE-BUCKET` with the S3 bucket name after creating it. The state path is `nginx/production/terraform.tfstate`, the bucket region defaults to `ap-south-1`, and encryption and S3 lock-file locking are enabled. Commit this configuration before running a production build. No backend file or backend Jenkins credential is needed. The bucket must already exist; Terraform does not create it during initialization.
+- Edit `environments/production/terraform.tfvars`, replace account, AMI and other placeholders, and commit it to Git. Terraform automatically loads this file from the production root during the Jenkins plan. Use an approved Amazon Linux 2023 x86_64 AMI for the deployment region.
 
-Keep completed files outside the Jenkins-managed workspace, which is deleted after builds. Do not commit completed configuration files, plans or state to Git.
+The production `terraform.tfvars` is intentionally tracked in Git and must contain only non-secret configuration. Keep AWS keys, passwords, plans and state out of Git. Authentication uses the Jenkins EC2 IAM role. Commit changes before running Jenkins, which checks out the repository into a temporary workspace.
 
 Run a **PLAN** build on `main` to review the proposed infrastructure. Run an **APPLY** build to create a fresh plan, review it and approve that exact saved plan in Jenkins. All Terraform commands execute on the AL2023 Jenkins EC2 instance.
 
@@ -206,14 +206,9 @@ The root `Jenkinsfile` runs checkout, formatting, initialization without a backe
 Configure Jenkins as follows:
 
 1. Create a **Multibranch Pipeline** for this repository with script path `Jenkinsfile`. The production branch name is `main`. Other branches run validation/tests only.
-2. Use the Jenkins **built-in node** on the same AL2023 EC2 instance, with **1 executor**, label `built-in`, Git, Java 21 and Terraform **1.17.0** on `PATH`, running Jenkins **2.580.1 LTS** as described above. Allow outbound access to Terraform provider downloads, AWS APIs and the S3 backend. Install Jenkins Pipeline, Git and Credentials Binding plugins on the controller.
+2. Use the Jenkins **built-in node** on the same AL2023 EC2 instance, with **1 executor**, label `built-in`, Git, Java 21 and Terraform **1.17.0** on `PATH`, running Jenkins **2.580.1 LTS** as described above. Allow outbound access to Terraform provider downloads, AWS APIs and the S3 backend. Install Jenkins Pipeline and Git plugins on the controller.
 3. Give this Jenkins EC2 instance an AWS deployment role through an EC2 instance profile or workload identity. Terraform uses the standard AWS credential chain; no AWS access keys are embedded in the pipeline. The role needs state/lock access plus permissions to manage the resources in these modules, including IAM role creation and `iam:PassRole`. Scope permissions to your deployment account and naming conventions.
-4. Add two Jenkins **Secret file** credentials, scoped to this trusted deployment job/folder:
-
-   | Credential ID | File content |
-   | --- | --- |
-   | `terraform-production-backend` | Completed `backend.hcl.example`, pointing to the existing state bucket/key |
-   | `terraform-production-tfvars` | Completed `terraform.tfvars.example`, with the account, approved AMI and other production inputs |
+4. Commit the completed production terraform.tfvars file. No Jenkins file credentials are required for backend settings or production variables.
 
 5. Create the Jenkins authorization group `terraform-production-approvers`, or change `PRODUCTION_APPROVERS` in the Jenkinsfile to your permitted Jenkins user IDs/group names. Jenkins administrators can also approve input steps. Restrict job configuration, replay and repository write permissions to trusted operators.
 6. The pipeline runs `terraform init -backend=false` before validation and tests. The root configuration pins AWS provider **6.70.0**. To record provider checksums in Git, perform a one-time `terraform -chdir=environments/production init -backend=false` in a separate checkout on this AL2023 instance and commit the generated lock file. This is setup only; routine tests and deployments run through Jenkins. To adopt a newer provider, update the root version constraint, regenerate and commit the lock file, and review a Jenkins PLAN build.
@@ -221,9 +216,9 @@ Configure Jenkins as follows:
 
 Run only trusted repository code on this Jenkins instance: build commands share the controller host and its deployment role. Keep fork PR builds disabled for this job and restrict repository writes, job configuration and replay to trusted operators. The main-branch condition controls pipeline stages; it does not restrict the EC2 role to main-branch code.
 
-Builds of this job queue rather than interrupt one another. S3 state locking also protects state operations across jobs; use a single production deployment job to avoid overlapping approval windows. Plan/apply failures fail the build and are not automatically retried. A stale saved plan is rejected by Terraform; rerun the pipeline to produce and approve a fresh plan. Build logs retain the Terraform plan output and should have restricted access. Secret files, binary plans and backend metadata are not archived; the workspace is deleted after every build.
+Builds of this job queue rather than interrupt one another. S3 state locking also protects state operations across jobs; use a single production deployment job to avoid overlapping approval windows. Plan/apply failures fail the build and are not automatically retried. A stale saved plan is rejected by Terraform; rerun the pipeline to produce and approve a fresh plan. Build logs retain the Terraform plan output and should have restricted access. Binary plans and backend metadata are not archived; the workspace is deleted after every build.
 
-The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipeline linter before first use; Terraform validation does not validate Jenkins syntax or plugin availability. See [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/) and [credentials binding](https://www.jenkins.io/doc/pipeline/steps/credentials-binding/) for controller configuration details.
+The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipeline linter before first use; Terraform validation does not validate Jenkins syntax or plugin availability. See [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/) for controller configuration details.
 
 ## Operational choices
 
@@ -247,6 +242,8 @@ The **Format** stage runs Terraform formatting checks. The **Validate and test**
 Tests use a mocked AWS provider and do not create AWS resources. They check the two-AZ topology, one shared NAT gateway and per-AZ private route tables and rejection of single-AZ deployments and invalid client CIDRs. A real plan and post-deployment smoke tests remain necessary to verify account permissions, service quotas, AMI compatibility and runtime bootstrap.
 
 References: [AWS provider ALB listeners](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener), [S3 backend and lockfiles](https://developer.hashicorp.com/terraform/language/backend/s3).
+
+
 
 
 
