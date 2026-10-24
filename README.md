@@ -196,13 +196,7 @@ The production `terraform.tfvars` is intentionally tracked in Git and must conta
 
 Run a **PLAN** build on `main` to review the proposed infrastructure. Run an **APPLY** build to create a fresh plan, review it and approve that exact saved plan in Jenkins. All Terraform commands execute on the AL2023 Jenkins EC2 instance.
 
-After apply, find the `alb_url` value in the Jenkins console output. Open that HTTP URL in your browser; `/healthz` should return `healthy`, and `/` displays the Origin instance explorer. No hosted zone, custom domain or certificate is required. This stack uses HTTP port 80 without encryption.
-
-The page shows the instance ID, Availability Zone and private IPv4 address of the EC2 instance that served the HTML. Bootstrap reads these fields using IMDSv2 and embeds them directly into `modules/ec2/index.html`; it never publishes the metadata token. Nginx also returns an `X-Served-By` header. These identity details are visible to everyone allowed to reach the ALB.
-
-Use **Send another request** to reload through the ALB. A per-instance accent color and ID suffix help distinguish servers; the page compares the current instance with the previous response in the same browser tab. Cache prevention ensures a fresh response, but the ALB can send consecutive requests to the same instance. This page identifies a response's origin; it does not measure overall fleet health.
-
-Changes to `modules/ec2/index.html` are included in launch-template user data and trigger an ASG rolling refresh after an approved Jenkins APPLY. Existing instances receive the page through replacement. Wait for the refresh to finish before expecting every response to show the new page; Terraform apply can finish before the refresh completes.
+After apply, find the `alb_url` value in the Jenkins console output. Open that HTTP URL in your browser; `/healthz` should return `healthy`, and `/` should display the Nginx page. No hosted zone, custom domain or certificate is required. This stack uses HTTP port 80 without encryption.
 
 Check healthy targets in the AWS target group console and instance distribution across AZs. Use AWS Systems Manager Session Manager to inspect application EC2 instances; there is no key pair, public instance IP or SSH ingress. The operator needs separate Session Manager permissions. Terraform validate checks configuration; these deployment checks verify the running service.
 ## Jenkins pipeline

@@ -4,9 +4,8 @@ resource "aws_launch_template" "this" {
   instance_type          = var.instance_type
   update_default_version = true
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
-    region           = var.region
-    log_group_name   = var.log_group_name
-    page_html_base64 = filebase64("${path.module}/index.html")
+    region         = var.region
+    log_group_name = var.log_group_name
   }))
 
   iam_instance_profile { name = var.instance_profile_name }
