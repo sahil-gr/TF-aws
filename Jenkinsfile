@@ -11,15 +11,14 @@ pipeline {
     }
 
     parameters {
-        choice(name: 'ACTION', choices: ['PLAN', 'APPLY'],
-            description: 'PLAN previews changes. APPLY also requires approval of the saved plan on main.')
+        choice(name: 'ACTION', choices: ['PLAN', 'APPLY', 'DESTROY'],
+            description: 'PLAN previews changes. APPLY and DESTROY require manual approval on main.')
     }
 
     environment {
         TF_IN_AUTOMATION = 'true'
         TF_INPUT = 'false'
         TF_ROOT = 'environments/production'
-        PLAN_HAS_CHANGES = 'false'
     }
 
     stages {
@@ -27,6 +26,16 @@ pipeline {
             steps {
                 deleteDir()
                 checkout scm
+                script {
+                    env.PLAN_HAS_CHANGES = 'false'
+                    echo "Requested action: ${params.ACTION}; branch: ${env.BRANCH_NAME}"
+                    if (!(params.ACTION in ['PLAN', 'APPLY', 'DESTROY'])) {
+                        error('Select PLAN, APPLY or DESTROY using Build with Parameters.')
+                    }
+                    if (params.ACTION != 'PLAN' && env.BRANCH_NAME != 'main') {
+                        error('APPLY and DESTROY must run from the main multibranch job.')
+                    }
+                }
                 sh 'terraform version'
             }
         }
@@ -60,36 +69,44 @@ pipeline {
                         terraform init -reconfigure -input=false -no-color
                     '''
                     script {
-                        int status = sh(
-                            label: 'Create production plan (0=no changes, 2=changes)',
-                            returnStatus: true,
-                            script: '''
-                                terraform plan -input=false -no-color -lock-timeout=5m \
+                        int status
+                        withEnv(["TF_PLAN_ACTION=${params.ACTION}"]) {
+                            status = sh(
+                                label: 'Create production plan (0=no changes, 2=changes)',
+                                returnStatus: true,
+                                script: '''
+                                set --
+                                if [ "$TF_PLAN_ACTION" = "DESTROY" ]; then
+                                    set -- -destroy
+                                fi
+                                terraform plan "$@" -input=false -no-color -lock-timeout=5m \
                                     -detailed-exitcode -out=production.tfplan
                             '''
-                        )
+                            )
+                        }
                         if (status == 2) {
                             env.PLAN_HAS_CHANGES = 'true'
+                            echo "Plan contains changes. ACTION=${params.ACTION}; PLAN stops after preview; APPLY/DESTROY require approval."
                         } else if (status != 0) {
                             error("Terraform plan failed with exit code ${status}.")
                         } else {
-                            echo 'No infrastructure changes required.'
+                            echo 'No changes in the plan (exit code 0). Approval and execution are skipped because there is nothing to apply or destroy.'
                         }
                     }
                 }
             }
         }
-        stage('Approve production apply') {
+        stage('Approve production changes') {
             when {
                 allOf {
                     branch 'main'
-                    expression { params.ACTION == 'APPLY' && env.PLAN_HAS_CHANGES == 'true' }
+                    expression { (params.ACTION in ['APPLY', 'DESTROY']) && env.PLAN_HAS_CHANGES == 'true' }
                 }
             }
             steps {
                 timeout(time: 20, unit: 'MINUTES') {
-                    input message: "Review the production plan in build ${env.BUILD_NUMBER} before applying.",
-                        ok: 'Apply saved plan'
+                    input message: "Review the ${params.ACTION} plan in build ${env.BUILD_NUMBER}. Proceed with ${params.ACTION} of production resources?",
+                        ok: "Approve ${params.ACTION}"
                 }
             }
         }
@@ -105,6 +122,24 @@ pipeline {
                 dir(env.TF_ROOT) {
                     // Uses this EC2 instance's AWS role through the AWS credential chain.
                     // Apply exactly the approved binary plan; never generate a new one here.
+                    sh '''
+                        set -eu
+                        terraform apply -input=false -no-color -lock-timeout=5m production.tfplan
+                    '''
+                }
+            }
+        }
+
+        stage('Destroy production') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { params.ACTION == 'DESTROY' && env.PLAN_HAS_CHANGES == 'true' }
+                }
+            }
+            steps {
+                dir(env.TF_ROOT) {
+                    // Apply the exact manually approved destroy plan.
                     sh '''
                         set -eu
                         terraform apply -input=false -no-color -lock-timeout=5m production.tfplan
