@@ -12,6 +12,20 @@ for attempt in 1 2 3 4 5; do
   sleep $((attempt * 15))
 done
 
+# Use IMDSv2 to identify this instance; the token is never written to the page.
+metadata_url=http://169.254.169.254/latest
+metadata_token=$(curl --fail --silent --show-error --noproxy '*' --retry 5 --connect-timeout 2 --max-time 10 \
+  -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' "$metadata_url/api/token")
+metadata() {
+  curl --fail --silent --show-error --noproxy '*' --retry 5 --connect-timeout 2 --max-time 10 \
+    -H "X-aws-ec2-metadata-token: $metadata_token" "$metadata_url/meta-data/$1"
+}
+instance_id=$(metadata instance-id)
+instance_az=$(metadata placement/availability-zone)
+instance_ip=$(metadata local-ipv4)
+instance_type=$(metadata instance-type)
+unset metadata_token
+
 cat > /etc/nginx/nginx.conf <<'NGINX'
 user nginx;
 worker_processes auto;
@@ -32,6 +46,10 @@ http {
         root /usr/share/nginx/html;
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options DENY always;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header X-Served-By "__INSTANCE_ID__" always;
+        etag off;
+        if_modified_since off;
         location = /healthz {
             access_log off;
             default_type text/plain;
@@ -44,9 +62,51 @@ NGINX
 
 cat > /usr/share/nginx/html/index.html <<'HTML'
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Nginx</title></head>
-<body><h1>Nginx is running</h1><p>Served by a private EC2 instance behind the Application Load Balancer.</p></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nginx — Serving instance</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 48px 20px; background: #eef3f9; color: #172b43; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 720px; margin: auto; padding: 36px; background: white; border-radius: 16px; box-shadow: 0 12px 40px #172b4312; }
+    .badge { color: #146c43; background: #e9f7ef; padding: 6px 12px; border-radius: 20px; font-size: 13px; }
+    h1 { margin: 24px 0 8px; font-size: clamp(25px, 5vw, 36px); line-height: 1.2; }
+    p { color: #50647a; }
+    dl { margin: 28px 0; }
+    dl div { padding: 14px 0; border-bottom: 1px solid #e3eaf2; }
+    dt { color: #50647a; font-size: 13px; }
+    dd { margin: 4px 0 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .note { font-size: 14px; }
+    a { color: #1558b0; text-underline-offset: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="badge">Response served by Nginx</span>
+    <h1>Hello from your EC2 instance!</h1>
+    <p>Your request reached the Application Load Balancer and was served by the instance shown below.</p>
+    <dl>
+      <div><dt>Instance ID</dt><dd>__INSTANCE_ID__</dd></div>
+      <div><dt>Availability Zone</dt><dd>__INSTANCE_AZ__</dd></div>
+      <div><dt>Private IP address</dt><dd>__INSTANCE_IP__</dd></div>
+      <div><dt>Instance type</dt><dd>__INSTANCE_TYPE__</dd></div>
+    </dl>
+    <p class="note">Refresh this page to send another request. The load balancer may select the same instance again.</p>
+    <a href="/healthz">Check this endpoint's health</a>
+  </main>
+</body>
+</html>
 HTML
+
+# Embed metadata directly so the displayed identity belongs to this HTML response.
+sed -i \
+  -e "s/__INSTANCE_ID__/$instance_id/g" \
+  -e "s/__INSTANCE_AZ__/$instance_az/g" \
+  -e "s/__INSTANCE_IP__/$instance_ip/g" \
+  -e "s/__INSTANCE_TYPE__/$instance_type/g" \
+  /usr/share/nginx/html/index.html /etc/nginx/nginx.conf
 
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'JSON'
 {
