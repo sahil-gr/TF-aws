@@ -8,22 +8,15 @@ locals {
   zones = { for index, az in var.availability_zones : az => index }
 }
 
-data "aws_ami" "al2023" {
-  count       = var.ami_id == null ? 1 : 0
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-kernel-6.1-x86_64"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  filter {
-    name   = "root-device-type"
-    values = ["ebs"]
-  }
+data "aws_ssm_parameter" "al2023" {
+  count           = var.ami_id == null ? 1 : 0
+  name            = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+  with_decryption = false
+}
+
+locals {
+  # This AWS public parameter contains a public AMI ID, not a secret.
+  selected_ami_id = var.ami_id != null ? var.ami_id : nonsensitive(data.aws_ssm_parameter.al2023[0].value)
 }
 
 module "vpc" {
@@ -120,7 +113,7 @@ module "ec2" {
   source                = "../../modules/ec2"
   name                  = local.name
   region                = var.region
-  ami_id                = var.ami_id != null ? var.ami_id : data.aws_ami.al2023[0].id
+  ami_id                = local.selected_ami_id
   instance_type         = var.instance_type
   private_subnet_ids    = [for subnet in module.private_subnet : subnet.id]
   security_group_id     = module.security_groups.web_id

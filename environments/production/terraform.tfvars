@@ -1,12 +1,12 @@
 project            = "nginx"
-region             = "ap-south-1"
+region             = "us-west-2"
 # Replace with your actual 12-digit AWS account ID.
-aws_account_id     = "123456789012"
-availability_zones = ["ap-south-1a", "ap-south-1b"]
+aws_account_id     = "633890776902"
+availability_zones = ["us-west-2a", "us-west-2b"]
 vpc_cidr           = "10.20.0.0/16"
 
-# Replace before deploying: approved AL2023 x86_64 AMI in ap-south-1.
-ami_id           = "REPLACE-WITH-YOUR-AMI-ID"
+# Automatically fetch AWS's latest standard AL2023 x86_64 AMI in this region.
+ami_id           = null
 instance_type    = "t3.small"
 min_size         = 2
 desired_capacity = 2
@@ -19,5 +19,5 @@ alarm_topic_arns = []
 
 tags = {
   Owner      = "platform-team"
-  CostCenter = "REPLACE-ME"
+  CostCenter = "DevOps"
 }

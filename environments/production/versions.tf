@@ -8,9 +8,9 @@ terraform {
   }
   backend "s3" {
     # Create this bucket separately, then replace the placeholder before deployment.
-    bucket       = "REPLACE-WITH-EXISTING-STATE-BUCKET"
-    key          = "nginx/production/terraform.tfstate"
-    region       = "ap-south-1"
+    bucket       = "amn-bckend-tf"
+    key          = "production/terraform.tfstate"
+    region       = "us-west-2"
     encrypt      = true
     use_lockfile = true
   }

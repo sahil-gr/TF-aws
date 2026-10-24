@@ -1,10 +1,10 @@
 project            = "nginx"
-region             = "ap-south-1"
+region             = "us-west-2"
 aws_account_id     = "123456789012"
-availability_zones = ["ap-south-1a", "ap-south-1b"]
+availability_zones = ["us-west-2a", "us-west-2b"]
 vpc_cidr           = "10.20.0.0/16"
 
-# Pin a tested AL2023 x86_64 AMI ID before production rollout.
+# Automatically fetch AWS's latest standard AL2023 x86_64 AMI in this region.
 ami_id           = null
 instance_type    = "t3.small"
 min_size         = 2

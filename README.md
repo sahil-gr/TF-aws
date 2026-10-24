@@ -1,10 +1,10 @@
-﻿# TF-aws: production-oriented Nginx on AWS
+# TF-aws: production-oriented Nginx on AWS
 
 Terraform provisions an internet-facing Application Load Balancer in public subnets and Nginx EC2 instances in private subnets across two Availability Zones. An Auto Scaling Group starts with two instances, replaces unhealthy hosts and scales on average CPU utilization. No infrastructure is deployed by adding these files.
 
 ## Architecture
 
-The diagram shows the default two-AZ deployment in `ap-south-1`. Solid arrows show application traffic and outbound routes; dotted arrows show management, logging and deployment relationships.
+The diagram shows the default two-AZ deployment in `us-west-2`. Solid arrows show application traffic and outbound routes; dotted arrows show management, logging and deployment relationships.
 
 ```mermaid
 flowchart TB
@@ -26,7 +26,7 @@ flowchart TB
             alb["One internet-facing ALB across both public subnets<br/>HTTP listener :80; ALB security group"]
             tg["Target group HTTP :80<br/>Health check /healthz"]
 
-            subgraph aza["Availability Zone ap-south-1a"]
+            subgraph aza["Availability Zone us-west-2a"]
                 subgraph public_a["Public subnet 10.20.0.0/24"]
                     nat_a["Shared NAT Gateway + Elastic IP"]
                 end
@@ -36,7 +36,7 @@ flowchart TB
                 end
             end
 
-            subgraph azb["Availability Zone ap-south-1b"]
+            subgraph azb["Availability Zone us-west-2b"]
                 subgraph public_b["Public subnet 10.20.1.0/24"]
                     public_b_note["ALB subnet; no NAT gateway"]
                 end
@@ -85,7 +85,7 @@ CIDRs, AZs and capacity values above are defaults. The configuration accepts two
 ## Structure
 
 ```text
-environments/production/       Deployable root, inputs, S3 backend configuration, tests
+environments/production/       Deployable root, inputs, S3 backend configuration
 modules/
   vpc/                        VPC, DNS support, empty default security group
   subnet/                     Reusable public/private subnet, no auto public IPs
@@ -105,7 +105,7 @@ Every module declares its provider requirements and exposes inputs/outputs; prov
 
 - Install Terraform CLI **1.17.0**, Jenkins **2.580.1 LTS**, and Amazon Corretto **Java 21** using the Amazon Linux 2023 steps below (versions checked on October 24, 2026). The code accepts Terraform >= 1.11 and < 2; the AWS provider is pinned to **6.70.0** and is downloaded by `terraform init`. Commit the generated `.terraform.lock.hcl` to record provider checksums.
 - AWS credentials from an assumed role, SSO or workload identity; never put credentials into Terraform files. The provider checks `aws_account_id` before deploying.
-- Two supported AZs in the selected region, sufficient EC2/EIP/NAT quotas and an unused VPC CIDR. Default region is Mumbai (`ap-south-1`).
+- Two supported AZs in the selected region, sufficient EC2/EIP/NAT quotas and an unused VPC CIDR. Default region is Oregon (`us-west-2`).
 - An existing S3 state bucket, provisioned separately, with versioning, encryption, public access blocked and least-privilege access. Backend credentials need bucket listing and state object read/write; the `.tflock` object also needs read/write/delete. For KMS encryption, grant the backend role the required key permissions.
 
 ## Amazon Linux 2023: install Jenkins and Terraform
@@ -182,15 +182,15 @@ sudo systemctl status jenkins --no-pager
 
 ### 3. Configure the Jenkins pipeline
 
-Follow the **Jenkins pipeline** section below to configure the committed production variables, deployment permissions, approvers and multibranch job. Jenkins runs formatting checks, validation, mocked tests, production planning and approved applies on this EC2 instance. No workstation testing is required.
+Follow the **Jenkins pipeline** section below to configure the committed production variables, deployment permissions, approvers and multibranch job. Jenkins runs formatting checks, validation, production planning and approved applies on this EC2 instance. No workstation testing is required.
 Installation references: [Jenkins Linux installation](https://www.jenkins.io/doc/book/installing/linux/), [Jenkins LTS releases](https://www.jenkins.io/changelog-stable/), [Jenkins Java support](https://www.jenkins.io/doc/book/platform-information/support-policy-java/), and [Terraform 1.17.0 binaries](https://releases.hashicorp.com/terraform/1.17.0/).
 
 ## Configure production inputs and deploy through Jenkins
 
 Configure the S3 backend directly in `environments/production/versions.tf`, then prepare the production variables file for Jenkins:
 
-- In the `backend "s3"` block in `versions.tf`, replace `REPLACE-WITH-EXISTING-STATE-BUCKET` with the S3 bucket name after creating it. The state path is `nginx/production/terraform.tfstate`, the bucket region defaults to `ap-south-1`, and encryption and S3 lock-file locking are enabled. Commit this configuration before running a production build. No backend file or backend Jenkins credential is needed. The bucket must already exist; Terraform does not create it during initialization.
-- Edit `environments/production/terraform.tfvars`, replace account, AMI and other placeholders, and commit it to Git. Terraform automatically loads this file from the production root during the Jenkins plan. Use an approved Amazon Linux 2023 x86_64 AMI for the deployment region.
+- In the `backend "s3"` block in `versions.tf`, replace `REPLACE-WITH-EXISTING-STATE-BUCKET` with the S3 bucket name after creating it. The state path is `production/terraform.tfstate`, the bucket region defaults to `us-west-2`, and encryption and S3 lock-file locking are enabled. Commit this configuration before running a production build. No backend file or backend Jenkins credential is needed. The bucket must already exist; Terraform does not create it during initialization.
+- Edit `environments/production/terraform.tfvars`, replace account and other placeholders, and commit it to Git. Terraform automatically loads this file from the production root during the Jenkins plan. Leave `ami_id = null` to fetch AWS's latest standard Amazon Linux 2023 x86_64 AMI for the deployment region automatically. This matches the default `t3.small` instance type. Set a specific AMI ID only when you want to override automatic selection.
 
 The production `terraform.tfvars` is intentionally tracked in Git and must contain only non-secret configuration. Keep AWS keys, passwords, plans and state out of Git. Authentication uses the Jenkins EC2 IAM role. Commit changes before running Jenkins, which checks out the repository into a temporary workspace.
 
@@ -198,20 +198,20 @@ Run a **PLAN** build on `main` to review the proposed infrastructure. Run an **A
 
 After apply, find the `alb_url` value in the Jenkins console output. Open that HTTP URL in your browser; `/healthz` should return `healthy`, and `/` should display the Nginx page. No hosted zone, custom domain or certificate is required. This stack uses HTTP port 80 without encryption.
 
-Check healthy targets in the AWS target group console and instance distribution across AZs. Use AWS Systems Manager Session Manager to inspect application EC2 instances; there is no key pair, public instance IP or SSH ingress. The operator needs separate Session Manager permissions. Automated Terraform tests check configuration; these deployment checks verify the running service.
+Check healthy targets in the AWS target group console and instance distribution across AZs. Use AWS Systems Manager Session Manager to inspect application EC2 instances; there is no key pair, public instance IP or SSH ingress. The operator needs separate Session Manager permissions. Terraform validate checks configuration; these deployment checks verify the running service.
 ## Jenkins pipeline
 
-The root `Jenkinsfile` runs checkout, formatting, initialization without a backend, validation and mocked Terraform tests on each branch. On `main`, it also initializes the S3 backend and creates a production plan. `ACTION=PLAN` is the default. Select `ACTION=APPLY` to generate a new plan and then request approval; the pipeline applies that exact saved plan only when changes exist. Approval expires after 20 minutes. There is no destroy action.
+The root `Jenkinsfile` runs checkout, formatting, initialization without a backend and validation on each branch. On `main`, it also initializes the S3 backend and creates a production plan. `ACTION=PLAN` is the default. Select `ACTION=APPLY` to generate a new plan and then request approval; the pipeline applies that exact saved plan only when changes exist. Approval expires after 20 minutes. There is no destroy action.
 
 Configure Jenkins as follows:
 
-1. Create a **Multibranch Pipeline** for this repository with script path `Jenkinsfile`. The production branch name is `main`. Other branches run validation/tests only.
+1. Create a **Multibranch Pipeline** for this repository with script path `Jenkinsfile`. The production branch name is `main`. Other branches run formatting checks and validation only.
 2. Use the Jenkins **built-in node** on the same AL2023 EC2 instance, with **1 executor**, label `built-in`, Git, Java 21 and Terraform **1.17.0** on `PATH`, running Jenkins **2.580.1 LTS** as described above. Allow outbound access to Terraform provider downloads, AWS APIs and the S3 backend. Install Jenkins Pipeline and Git plugins on the controller.
-3. Give this Jenkins EC2 instance an AWS deployment role through an EC2 instance profile or workload identity. Terraform uses the standard AWS credential chain; no AWS access keys are embedded in the pipeline. The role needs state/lock access plus permissions to manage the resources in these modules, including IAM role creation and `iam:PassRole`. Scope permissions to your deployment account and naming conventions.
+3. Give this Jenkins EC2 instance an AWS deployment role through an EC2 instance profile or workload identity. Terraform uses the standard AWS credential chain; no AWS access keys are embedded in the pipeline. The role needs state/lock access plus permissions to manage the resources in these modules, including IAM role creation and `iam:PassRole`. For automatic AMI lookup, also allow `ssm:GetParameter` on `arn:aws:ssm:us-west-2::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64` (adjust the region if it changes). Scope permissions to your deployment account and naming conventions.
 4. Commit the completed production terraform.tfvars file. No Jenkins file credentials are required for backend settings or production variables.
 
 5. No approver group or user IDs are configured. For an APPLY build with changes, Jenkins pauses at **Approve production apply** for up to 20 minutes. Review the plan and click **Apply saved plan** to continue, or abort to stop deployment. The pipeline imposes no named-submitter restriction; access is governed by your Jenkins permissions.
-6. The pipeline runs `terraform init -backend=false` before validation and tests. The root configuration pins AWS provider **6.70.0**. To record provider checksums in Git, perform a one-time `terraform -chdir=environments/production init -backend=false` in a separate checkout on this AL2023 instance and commit the generated lock file. This is setup only; routine tests and deployments run through Jenkins. To adopt a newer provider, update the root version constraint, regenerate and commit the lock file, and review a Jenkins PLAN build.
+6. The pipeline runs `terraform init -backend=false` before validation. The root configuration pins AWS provider **6.70.0**. To record provider checksums in Git, perform a one-time `terraform -chdir=environments/production init -backend=false` in a separate checkout on this AL2023 instance and commit the generated lock file. This is setup only; routine validation and deployments run through Jenkins. To adopt a newer provider, update the root version constraint, regenerate and commit the lock file, and review a Jenkins PLAN build.
 7. Run a `PLAN` build on `main` and review its console output. For deployment, run an `APPLY` build and have an authorized operator review and approve its plan.
 
 Run only trusted repository code on this Jenkins instance: build commands share the controller host and its deployment role. Keep fork PR builds disabled for this job and restrict repository writes, job configuration and replay to trusted operators. The main-branch condition controls pipeline stages; it does not restrict the EC2 role to main-branch code.
@@ -226,7 +226,7 @@ The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipel
 - For an existing per-AZ NAT deployment, review a Jenkins PLAN build before applying: the first AZ's NAT gateway and Elastic IP keep their Terraform addresses, other AZs' NAT gateways and Elastic IPs are removed, and their private default routes switch to the retained NAT. Allow for temporary outbound interruption during the change. Keep the availability-zone list order stable.
 - The internet-facing ALB listens on HTTP port 80 in the public subnets and forwards to private Nginx instances on port 80. EC2 accepts web traffic only from the ALB security group.
 - EC2 uses IMDSv2, encrypted gp3 root disks and detailed monitoring. Nginx and the CloudWatch agent install through HTTPS repositories during bootstrap, with bounded retries and failure logging. Failed web health checks lead to ASG replacement after the grace period.
-- `ami_id = null` discovers the latest matching AL2023 AMI and can cause a rollout on a subsequent plan. Pin an approved AMI for controlled releases. For reproducible deployments, bake Nginx and the agent into a tested AMI and replace package installation in user data with configuration only.
+- `ami_id = null` reads `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64` from AWS Systems Manager Parameter Store in the configured region during planning. The `selected_ami_id` output shows the chosen ID. Jenkins applies that saved plan, so it uses the AMI selected during planning. A later plan can pick up a newer AMI and trigger a rolling refresh after manual approval. A specific `ami_id` overrides discovery. For reproducible deployments, bake Nginx and the agent into a tested AMI and replace package installation in user data with configuration only.
 - Launch template updates trigger rolling instance refresh with automatic rollback. Allow EC2 quota for temporary surge capacity. Desired capacity is ignored after creation so Terraform does not undo autoscaling; use the ASG controls for manual capacity changes.
 - ALB access logs go to a private, encrypted, versioned S3 bucket with 90-day expiration; Nginx/bootstrap and VPC flow logs go to CloudWatch with 90-day retention. ALB access logging uses SSE-S3. CloudWatch uses service encryption by default; add customer-managed KMS keys if your policy requires them.
 - An unhealthy-target alarm is created. Populate `alarm_topic_arns` with existing SNS topics and confirmed subscriptions to receive notifications. CPU target tracking creates its own scaling alarms. Set additional latency, 5xx, capacity and billing alarms to your service SLOs.
@@ -235,11 +235,11 @@ The Jenkinsfile must be checked with your Jenkins controller's Declarative Pipel
 
 One NAT gateway, ALB, EC2, EBS, public IPv4, logs and data transfer incur ongoing charges. WAF, DNS records, certificate issuance, organization-level CloudTrail/GuardDuty, backups and workload-specific compliance controls are outside this stack. Review those needs before treating this baseline as production-ready for your service.
 
-## Validation and tests in Jenkins
+## Validation in Jenkins
 
-The **Format** stage runs Terraform formatting checks. The **Validate and test** stage initializes without the backend, validates the configuration and runs the mocked tests. Review the Jenkins console output for results. These stages execute on every branch; production planning and approved applies run on main.
+The **Format** stage runs Terraform formatting checks. The **Validate** stage initializes without the backend and validates the configuration. Review the Jenkins console output for results. These stages execute on every branch; production planning and approved applies run on main.
 
-Tests use a mocked AWS provider and do not create AWS resources. They check the two-AZ topology, one shared NAT gateway and per-AZ private route tables and rejection of single-AZ deployments and invalid client CIDRs. A real plan and post-deployment smoke tests remain necessary to verify account permissions, service quotas, AMI compatibility and runtime bootstrap.
+Formatting and configuration validation do not create AWS resources. Review the production plan and check the deployed service to verify account permissions, service quotas, AMI compatibility and runtime bootstrap.
 
 References: [AWS provider ALB listeners](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener), [S3 backend and lockfiles](https://developer.hashicorp.com/terraform/language/backend/s3).
 

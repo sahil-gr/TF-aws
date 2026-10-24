@@ -11,7 +11,7 @@ variable "project" {
 variable "region" {
   description = "AWS region for all resources."
   type        = string
-  default     = "ap-south-1"
+  default     = "us-west-2"
 }
 
 variable "aws_account_id" {
@@ -26,7 +26,7 @@ variable "aws_account_id" {
 variable "availability_zones" {
   description = "Two or three standard AZs in region. Keep their order stable: indices determine subnet CIDRs."
   type        = list(string)
-  default     = ["ap-south-1a", "ap-south-1b"]
+  default     = ["us-west-2a", "us-west-2b"]
   validation {
     condition = (
       length(var.availability_zones) >= 2 && length(var.availability_zones) <= 3 &&
@@ -58,7 +58,7 @@ variable "allowed_client_cidrs" {
 }
 
 variable "ami_id" {
-  description = "Pinned Amazon Linux 2023 x86_64 AMI. Null discovers latest; pin a tested image before production rollout."
+  description = "Optional Amazon Linux 2023 x86_64 AMI override. Null reads AWS's latest standard AMI from the regional public SSM parameter."
   type        = string
   default     = null
   validation {

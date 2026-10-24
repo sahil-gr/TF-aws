@@ -1,3 +1,8 @@
+output "selected_ami_id" {
+  description = "Amazon Linux 2023 AMI selected for the EC2 launch template."
+  value       = local.selected_ami_id
+}
+
 output "vpc_id" {
   description = "Application VPC ID."
   value       = module.vpc.id

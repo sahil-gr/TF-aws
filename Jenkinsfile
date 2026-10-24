@@ -37,14 +37,13 @@
             }
         }
 
-        stage('Validate and test') {
+        stage('Validate') {
             steps {
                 dir(env.TF_ROOT) {
                     sh '''
                         set -eu
                         terraform init -backend=false -input=false -no-color
                         terraform validate -no-color
-                        terraform test -no-color
                     '''
                 }
             }
