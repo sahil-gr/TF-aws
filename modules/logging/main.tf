@@ -3,7 +3,8 @@ data "aws_partition" "current" {}
 
 resource "aws_s3_bucket" "alb" {
   bucket_prefix = "${var.name}-alb-"
-  force_destroy = false
+  # Delete ALB access-log objects and versions when this bucket is destroyed.
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "alb" {
