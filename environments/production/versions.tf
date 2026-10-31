@@ -8,7 +8,7 @@ terraform {
   }
   backend "s3" {
     # Create this bucket separately, then replace the placeholder before deployment.
-    bucket       = "amn-bckend-tf"
+    bucket       = "am-state-tf"
     key          = "production/terraform.tfstate"
     region       = "us-west-2"
     encrypt      = true
