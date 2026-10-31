@@ -120,8 +120,6 @@ pipeline {
             }
             steps {
                 dir(env.TF_ROOT) {
-                    // Uses this EC2 instance's AWS role through the AWS credential chain.
-                    // Apply exactly the approved binary plan; never generate a new one here.
                     sh '''
                         set -eu
                         terraform apply -input=false -no-color -lock-timeout=5m production.tfplan
@@ -152,7 +150,6 @@ pipeline {
     post {
         always {
             // Saved plans and .terraform backend metadata can contain sensitive data.
-            // Do not archive or stash them, or retain them in a reused workspace.
             deleteDir()
         }
     }
