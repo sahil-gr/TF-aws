@@ -243,23 +243,3 @@ Formatting and configuration validation do not create AWS resources. Review the 
 
 References: [AWS provider ALB listeners](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener), [S3 backend and lockfiles](https://developer.hashicorp.com/terraform/language/backend/s3).
 
-
-
-
-
-
-
-### Recover an existing nonempty ALB log bucket after a failed destroy
-
-Pull the latest code into a separate checkout on the AL2023 Jenkins EC2 instance. Do not run a normal full APPLY after a partial destroy: it could recreate infrastructure. From the repository root, apply only the log bucket setting:
-
-```bash
-terraform -chdir=environments/production init -reconfigure
-terraform -chdir=environments/production plan \
-  -target=module.logging.aws_s3_bucket.alb \
-  -out=enable-log-cleanup.tfplan
-# Verify the plan only updates the existing log bucket, with force_destroy = true.
-terraform -chdir=environments/production apply enable-log-cleanup.tfplan
-```
-
-This targeted apply is a one-time recovery step, not the routine deployment workflow. Stop if the plan proposes creating/replacing the bucket or unrelated resources. Then run a new Jenkins DESTROY build and approve its fresh plan. Do not run this recovery concurrently with another pipeline build. The S3 state bucket is external to this stack and is not affected by log cleanup.
