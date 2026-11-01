@@ -1,6 +1,6 @@
 # TF-aws: production-oriented Nginx on AWS
 
-Terraform provisions an internet-facing Application Load Balancer in public subnets and Nginx EC2 instances in private subnets across two Availability Zones. An Auto Scaling Group starts with two instances, replaces unhealthy hosts and scales on average CPU utilization. No infrastructure is deployed by adding these files.
+Terraform provisions an internet-facing Application Load Balancer in public subnets and Nginx EC2 instances in private subnets across two Availability Zones. An Auto Scaling Group starts with two instances, replaces unhealthy hosts and scales on average CPU utilization.
 
 ## Architecture
 
@@ -165,8 +165,6 @@ git --version
 sudo -u jenkins /usr/local/bin/terraform version
 ```
 
-Terraform should report **v1.17.0**. Java should report **21**. The Jenkins RPM already creates the `jenkins` user. Pipeline commands run as that user without sudo.
-
 Make `/usr/local/bin` available to the Jenkins service, then restart it:
 
 ```bash
@@ -189,7 +187,7 @@ Installation references: [Jenkins Linux installation](https://www.jenkins.io/doc
 
 Configure the S3 backend directly in `environments/production/versions.tf`, then prepare the production variables file for Jenkins:
 
-- In the `backend "s3"` block in `versions.tf`, replace `REPLACE-WITH-EXISTING-STATE-BUCKET` with the S3 bucket name after creating it. The state path is `production/terraform.tfstate`, the bucket region defaults to `us-west-2`, and encryption and S3 lock-file locking are enabled. Commit this configuration before running a production build. No backend file or backend Jenkins credential is needed. The bucket must already exist; Terraform does not create it during initialization.
+- In the `backend "s3"` block in `versions.tf`, replace `am-state-tf` with the S3 bucket name after creating it. The state path is `production/terraform.tfstate`, the bucket region defaults to `us-west-2`, and encryption and S3 lock-file locking are enabled. Commit this configuration before running a production build. No backend file or backend Jenkins credential is needed. The bucket must already exist; Terraform does not create it during initialization.
 - Edit `environments/production/terraform.tfvars`, replace account and other placeholders, and commit it to Git. Terraform automatically loads this file from the production root during the Jenkins plan. Leave `ami_id = null` to fetch AWS's latest standard Amazon Linux 2023 x86_64 AMI for the deployment region automatically. This matches the default `t3.small` instance type. Set a specific AMI ID only when you want to override automatic selection.
 
 The production `terraform.tfvars` is intentionally tracked in Git and must contain only non-secret configuration. Keep AWS keys, passwords, plans and state out of Git. Authentication uses the Jenkins EC2 IAM role. Commit changes before running Jenkins, which checks out the repository into a temporary workspace.
