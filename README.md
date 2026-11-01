@@ -1,5 +1,7 @@
 # TF-aws: production-oriented Nginx on AWS
 
+> **Student troubleshooting edition:** This version contains one intentional web-serving configuration fault. The architecture below describes the intended working system. Complete [the troubleshooting assignment](ASSIGNMENT.md) before using this version as a working deployment baseline.
+
 Terraform provisions an internet-facing Application Load Balancer in public subnets and Nginx EC2 instances in private subnets across two Availability Zones. An Auto Scaling Group starts with two instances, replaces unhealthy hosts and scales on average CPU utilization.
 
 ## Architecture
